@@ -82,6 +82,19 @@
           border: none;
            box-shadow: 0 0 5px rgba(0,0,0,0.3);
         }
+        .custom-select {
+            background-color: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+        .custom-select option {
+            background-color: #021B79;
+            color: white;
+        }
+        .custom-select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body class="gradient-bg text-white">
@@ -124,6 +137,27 @@
             <audio id="audioPlayer" preload="none"></audio>
         </main>
 
+        <!-- New Section for Surah Selection -->
+        <section class="mt-8">
+            <h3 class="text-3xl font-bold mb-6 text-center">تلاوات خاصة</h3>
+            <div class="glass-card rounded-2xl p-6 md:p-8 shadow-xl">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label for="reciterSelect" class="block mb-2 text-sm font-medium text-gray-300">اختر القارئ:</label>
+                        <select id="reciterSelect" class="custom-select block w-full p-3 rounded-lg border-gray-600 focus:ring-blue-500 focus:border-blue-500 transition">
+                            <option selected disabled>جاري تحميل القراء...</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="surahSelect" class="block mb-2 text-sm font-medium text-gray-300">اختر السورة:</label>
+                        <select id="surahSelect" class="custom-select block w-full p-3 rounded-lg border-gray-600 focus:ring-blue-500 focus:border-blue-500 transition" disabled>
+                            <option selected disabled>اختر القارئ أولاً</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- Stations List -->
         <section class="mt-8">
             <h3 class="text-3xl font-bold mb-6 text-center">قائمة الإذاعات</h3>
@@ -157,9 +191,13 @@
             const stationNameDisplay = document.getElementById('stationName');
             const stationsGrid = document.getElementById('stationsGrid');
             const loadingIndicator = document.getElementById('loading');
+            const reciterSelect = document.getElementById('reciterSelect');
+            const surahSelect = document.getElementById('surahSelect');
 
             let isPlaying = false;
             let currentStationElement = null;
+            let allSurahs = [];
+            let allReciters = [];
 
             const stations = [
                 {
@@ -205,23 +243,28 @@
                 audioPlayer.volume = e.target.value;
             });
             
-            // --- Station Selection ---
-            
-            function playStation(name, url, element) {
+            // --- Unified Audio Playback ---
+
+            function playAudioSource(name, url, element = null) {
                 stationNameDisplay.textContent = name;
                 stationNameDisplay.title = name;
                 audioPlayer.src = url;
                 audioPlayer.play().catch(error => console.error("Playback error:", error));
                 
-                // Update active station style
+                // Update active station style only for radio stations
                 if (currentStationElement) {
                     currentStationElement.classList.remove('bg-white', 'text-blue-700', 'font-bold');
                     currentStationElement.classList.add('glass-card');
                 }
-                element.classList.add('bg-white', 'text-blue-700', 'font-bold');
-                element.classList.remove('glass-card');
-                currentStationElement = element;
+                if (element) {
+                    element.classList.add('bg-white', 'text-blue-700', 'font-bold');
+                    element.classList.remove('glass-card');
+                    currentStationElement = element;
+                } else {
+                    currentStationElement = null; // A surah is playing, not a station
+                }
             }
+
 
             // --- API Fetching and Rendering ---
 
@@ -231,17 +274,16 @@
                     const stationDiv = document.createElement('div');
                     stationDiv.className = 'station-item glass-card rounded-lg p-4 cursor-pointer transition-all duration-300';
                     stationDiv.textContent = station.name;
-                    stationDiv.setAttribute('data-url', station.url);
                     
                     stationDiv.addEventListener('click', () => {
-                        playStation(station.name, station.url, stationDiv);
+                        playAudioSource(station.name, station.url, stationDiv);
                     });
                     
                     stationsGrid.appendChild(stationDiv);
                 });
             }
 
-            async function fetchStations() {
+            async function fetchRadioStations() {
                 try {
                     const response = await fetch('https://www.mp3quran.net/api/v3/radios');
                     if (!response.ok) {
@@ -249,28 +291,108 @@
                     }
                     const data = await response.json();
                     
-                    // Format API data and combine with the static station
-                    const apiStations = data.radios.map(radio => ({
-                        name: radio.name,
-                        url: radio.url
-                    }));
-                    
+                    const apiStations = data.radios.map(radio => ({ name: radio.name, url: radio.url }));
                     const allStations = [...stations, ...apiStations];
                     renderStations(allStations);
 
                 } catch (error) {
-                    console.error("Failed to fetch stations:", error);
-                    // Render only the default station on error
+                    console.error("Failed to fetch radio stations:", error);
                     renderStations(stations); 
                     stationsGrid.insertAdjacentHTML('beforeend', `<p class="text-center text-red-300 col-span-full">حدث خطأ أثناء تحميل الإذاعات الإضافية.</p>`);
                 } finally {
                     loadingIndicator.style.display = 'none';
                 }
             }
+            
+            // --- Reciters and Surahs Logic ---
+            
+            function populateReciters(reciters) {
+                reciterSelect.innerHTML = '<option selected disabled>اختر قارئًا...</option>';
+                reciters.forEach(reciter => {
+                    // Find the 'Hafs' narration if available, otherwise take the first one
+                    const hafsMoshaf = reciter.moshaf.find(m => m.name.includes("حفص عن عاصم")) || reciter.moshaf[0];
+                    if (hafsMoshaf) {
+                        const option = document.createElement('option');
+                        option.value = reciter.id;
+                        option.textContent = reciter.name;
+                        // Store moshaf data directly on the option element for easy access
+                        option.dataset.moshaf = JSON.stringify(hafsMoshaf);
+                        reciterSelect.appendChild(option);
+                    }
+                });
+            }
 
-            fetchStations();
+            function populateSurahs(moshaf) {
+                surahSelect.innerHTML = '<option selected disabled>اختر سورة...</option>';
+                const surahIds = moshaf.surah_list.split(',');
+                
+                surahIds.forEach(id => {
+                    const surahData = allSurahs.find(s => s.id == id);
+                    if (surahData) {
+                        const option = document.createElement('option');
+                        option.value = surahData.id;
+                        option.textContent = surahData.name;
+                        surahSelect.appendChild(option);
+                    }
+                });
+                surahSelect.disabled = false;
+            }
+
+            reciterSelect.addEventListener('change', (e) => {
+                const selectedOption = e.target.options[e.target.selectedIndex];
+                const moshaf = JSON.parse(selectedOption.dataset.moshaf);
+                populateSurahs(moshaf);
+            });
+
+            surahSelect.addEventListener('change', (e) => {
+                const surahId = e.target.value;
+                const surahName = e.target.options[e.target.selectedIndex].textContent;
+                
+                const reciterOption = reciterSelect.options[reciterSelect.selectedIndex];
+                const reciterName = reciterOption.textContent;
+                const moshaf = JSON.parse(reciterOption.dataset.moshaf);
+                
+                const serverUrl = moshaf.server;
+                const formattedSurahId = String(surahId).padStart(3, '0');
+                const audioUrl = `${serverUrl}/${formattedSurahId}.mp3`;
+                
+                const displayName = `${surahName} - ${reciterName}`;
+                playAudioSource(displayName, audioUrl);
+            });
+
+
+            async function fetchRecitationData() {
+                try {
+                    const [recitersRes, surahsRes] = await Promise.all([
+                        fetch('https://www.mp3quran.net/api/v3/reciters?language=ar'),
+                        fetch('https://www.mp3quran.net/api/v3/suwar?language=ar')
+                    ]);
+
+                    if (!recitersRes.ok || !surahsRes.ok) {
+                         throw new Error('Failed to fetch recitation data');
+                    }
+
+                    const recitersData = await recitersRes.json();
+                    const surahsData = await surahsRes.json();
+                    
+                    allReciters = recitersData.reciters;
+                    allSurahs = surahsData.suwar;
+
+                    populateReciters(allReciters);
+
+                } catch (error) {
+                    console.error("Failed to fetch reciters/surahs:", error);
+                    reciterSelect.innerHTML = '<option selected disabled>خطأ في تحميل القراء</option>';
+                }
+            }
+
+
+            // --- Initial Load ---
+            fetchRadioStations();
+            fetchRecitationData();
         });
     </script>
 
 </body>
 </html>
+
